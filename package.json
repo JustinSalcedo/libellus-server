@@ -1,0 +1,41 @@
+{
+  "name": "libellus-server",
+  "version": "0.1.0",
+  "description": "API for the personal task management assistant",
+  "main": "index.js",
+  "scripts": {
+    "start": "nodemon",
+    "inspect": "nodemon --inspect index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JustinSalcedo/libellus-server.git"
+  },
+  "keywords": [
+    "api",
+    "time",
+    "management",
+    "assistant",
+    "schedule",
+    "task",
+    "tracker"
+  ],
+  "author": "Justin Salcedo",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/JustinSalcedo/libellus-server/issues"
+  },
+  "homepage": "https://github.com/JustinSalcedo/libellus-server#readme",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "method-override": "^3.0.0",
+    "sequelize": "^6.26.0",
+    "sqlite3": "^5.1.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.20",
+    "prettier": "^2.8.1"
+  }
+}
