@@ -1,3 +1,5 @@
+const functions = require("firebase-functions");
+
 const dotenv = require('dotenv')
 process.env.NODE_ENV = process.env.NODE_ENV || 'development'
 
@@ -157,9 +159,9 @@ app.use((err, req, res, next) => {
     })
 })
 
-app.listen(3000, () => {
-    console.log('Server listening on port 3000')
-})
+// app.listen(3000, () => {
+//     console.log('Server listening on port 3000')
+// })
 
 
 // Services
@@ -200,3 +202,5 @@ async function deleteTask(id) {
         throw new Error(`Error editing task ${id}: ${error}`)
     }
 }
+
+exports.api = functions.https.onRequest(app)

@@ -2,10 +2,12 @@
   "name": "libellus-server",
   "version": "0.1.0",
   "description": "API for the personal task management assistant",
-  "main": "index.js",
   "scripts": {
-    "start": "nodemon",
-    "inspect": "nodemon --inspect index.js"
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
   },
   "repository": {
     "type": "git",
@@ -26,7 +28,13 @@
     "url": "https://github.com/JustinSalcedo/libellus-server/issues"
   },
   "homepage": "https://github.com/JustinSalcedo/libellus-server#readme",
+  "engines": {
+    "node": "16"
+  },
+  "main": "index.js",
   "dependencies": {
+    "firebase-admin": "^10.0.2",
+    "firebase-functions": "^4.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",
@@ -35,7 +43,8 @@
     "sqlite3": "^5.1.2"
   },
   "devDependencies": {
-    "nodemon": "^2.0.20",
+    "firebase-functions-test": "^0.2.0",
     "prettier": "^2.8.1"
-  }
+  },
+  "private": true
 }
