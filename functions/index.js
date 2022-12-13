@@ -8,13 +8,18 @@ if (envFound.error) {
     throw new Error("Couldn't file .env file")
 }
 
-const { USER_ID } = process.env
+const { USER_ID, DB_USER, DB_PASSWD } = process.env
 
 
 // SQL Models
 
-const { Sequelize, Model, DataTypes } = require('sequelize')
-const sequelize = new Sequelize('sqlite::memory:')
+const { Sequelize, Model, DataTypes, Op } = require('sequelize')
+const sequelize = new Sequelize('database', DB_USER, DB_PASSWD, {
+    host: "0.0.0.0",
+    dialect: "sqlite",
+    pool: { max: 5, min: 0, idle: 10000 },
+    storage: "./db/database.sqlite"
+})
 
 const Task = sequelize.define('Task', {
     name: DataTypes.STRING,
@@ -22,7 +27,13 @@ const Task = sequelize.define('Task', {
     end: DataTypes.DATE
 })
 
-Task.sync()   // .sync({ force: true }) to restart table
+sequelize.authenticate()
+    .then(() => { console.log('Connection established'); setupModels() })
+    .catch(error => console.error('Unable to connect to database: %o', error))
+
+function setupModels() {
+    Task.sync()   // .sync({ force: true }) to restart table
+}
 
 // Setup
 
@@ -57,6 +68,25 @@ app.use((req, res, next) => {
 
 // API
 
+const timelineRouter = express.Router()
+app.use('/timeline', timelineRouter)
+
+timelineRouter.get(
+    '',
+    async (req, res, next) => {
+        console.log('Calling /timeline')
+
+        try {
+            const timeline = await getTimeline()
+            if (!timeline) return next(new Error('Undefined response'))
+            return res.status(200).json({ timeline })
+        } catch (error) {
+            console.error('Error: %o', error)
+            return next(error)
+        }
+    }
+)
+
 const scheduleRouter = express.Router()
 app.use('/schedule', scheduleRouter)
 
@@ -66,7 +96,7 @@ scheduleRouter.get(
         console.log('Calling /schedule')
 
         try {
-            const schedule = await getSchedule()
+            const schedule = await getTodaysSchedule()
             if (!schedule) return next(new Error('Undefined response'))
             return res.status(200).json({ schedule })
         } catch (error) {
@@ -108,6 +138,23 @@ taskRouter.put(
             const wasUpdated = await editTask(id, { name, start, end })
             if (!wasUpdated) return next(new Error('Update failed'))
             return res.status(200).end()
+        } catch (error) {
+            console.error('Error: %o', error)
+            return next(error)
+        }
+    }
+)
+
+taskRouter.delete(
+    '',
+    async (req, res, next) => {
+        console.log('Calling /task')
+
+        try {
+            const { ids } = req.body
+            const deletedCount = await deleteManyTasks(ids)
+            if (!deletedCount) return next(new Error('No items were deleted'))
+            return res.status(200).json({ deletedCount })
         } catch (error) {
             console.error('Error: %o', error)
             return next(error)
@@ -166,13 +213,28 @@ app.use((err, req, res, next) => {
 
 // Services
 
-async function getSchedule() {
+async function getTimeline(dateRange) {
     try {
+        if (dateRange) {
+            const { startDate, endDate } = dateRange
+            const records = await Task.findAll({
+                where: { start: { [Op.between]: [startDate, endDate] } }
+            })
+            return records
+        }
         const records = await Task.findAll()
         return records
     } catch (error) {
-        throw new Error(`Error getting schedule: ${error}`)
+        throw new Error(`Error getting timeline:`)
     }
+}
+
+async function getTodaysSchedule() {
+    const now = new Date()
+    const today = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`
+    const startDate = new Date(today)
+    const endDate = new Date(`${today} 23:59:59`)
+    return getTimeline({ startDate, endDate })
 }
 
 async function createSchedule(schedule) {
@@ -199,7 +261,16 @@ async function deleteTask(id) {
         const deletedCount = await Task.destroy({ where: { id } })
         return !!deletedCount   // was deleted?
     } catch (error) {
-        throw new Error(`Error editing task ${id}: ${error}`)
+        throw new Error(`Error deleting task ${id}: ${error}`)
+    }
+}
+
+async function deleteManyTasks(ids) {
+    try {
+        const deletedCount = await Task.destroy({ where: { id: ids } })
+        return deletedCount
+    } catch (error) {
+        throw new Error(`Error deleting tasks ${ids.join(', ')}: ${error}`)
     }
 }
 
