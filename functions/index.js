@@ -225,7 +225,7 @@ async function getTimeline(dateRange) {
         const records = await Task.findAll()
         return records
     } catch (error) {
-        throw new Error(`Error getting timeline:`)
+        throw new Error(`Error getting timeline: ${error}`)
     }
 }
 
