@@ -8,32 +8,123 @@ if (envFound.error) {
     throw new Error("Couldn't file .env file")
 }
 
-const { USER_ID, DB_USER, DB_PASSWD } = process.env
+const { USER_ID } = process.env
 
 
-// SQL Models
+// Firestore
 
-const { Sequelize, Model, DataTypes, Op } = require('sequelize')
-const sequelize = new Sequelize('database', DB_USER, DB_PASSWD, {
-    host: "0.0.0.0",
-    dialect: "sqlite",
-    pool: { max: 5, min: 0, idle: 10000 },
-    storage: "./db/database.sqlite"
-})
+const { initializeApp } = require('firebase-admin/app')
+const { getFirestore } = require('firebase-admin/firestore')
 
-const Task = sequelize.define('Task', {
-    name: DataTypes.STRING,
-    start: DataTypes.DATE,
-    end: DataTypes.DATE
-})
+initializeApp()
+const db = getFirestore()
+db.settings({ ignoreUndefinedProperties: true })
 
-sequelize.authenticate()
-    .then(() => { console.log('Connection established'); setupModels() })
-    .catch(error => console.error('Unable to connect to database: %o', error))
+// From Cloud Firestore docs
+async function deleteQueryBatch(db, query, resolve, count) {
+    let localCount = count ? count : 0
+    const snapshot = await query.get();
 
-function setupModels() {
-    Task.sync()   // .sync({ force: true }) to restart table
+    const batchSize = snapshot.size;
+    if (batchSize === 0) {
+        // When there are no documents left, we are done
+        resolve({ deletedCount: localCount });
+        return;
+    }
+
+    // Delete documents in a batch
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+        ++localCount
+        batch.delete(doc.ref);
+    });
+    await batch.commit();
+
+    // Recurse on the next process tick, to avoid
+    // exploding the stack.
+    process.nextTick(() => {
+        deleteQueryBatch(db, query, resolve, localCount);
+    });
 }
+
+const parseDoc = doc => ({ id: doc.id, ...doc.data() })
+
+class TaskModel {
+    table = 'tasks'
+
+    async getMany({ dateRange, ids }) {
+        if (dateRange) {
+            const { startDate, endDate } = dateRange
+            const snapshot = await db.collection(this.table)
+                .where('start', '>=', startDate)
+                .where('start', '<=', endDate)
+                .get()
+            return snapshot.docs.map(parseDoc)
+        }
+
+        // Only return up to 10 items
+        if (ids.length > 10) throw new Error('Cannot return more than 10 items per ID')
+        const snapshot = await db.collection(this.table)
+            .where('__name__', 'in', ids).get()
+        return snapshot.docs.map(parseDoc)
+    }
+
+    async getAll() {
+        const snapshot = await db.collection(this.table).get()
+        return snapshot.docs.map(parseDoc)
+    }
+
+    async create(task) {
+        const docRef = await db.collection(this.table).add(task)
+
+        return { id: docRef.id, ...task }   // docRef has no data
+    }
+
+    async createMany(tasks) {
+        const batch = db.batch()
+        const docs = tasks.map(task => {
+            const docRef = db.collection(this.table).doc()
+            batch.create(docRef, task)
+            return { id: docRef.id, ...task }
+        })
+        await batch.commit()
+        return docs
+    }
+
+    async update(id, task) {
+        const taskData = { ...task }; delete taskData.id
+        await db.collection(this.table).doc(id).update(task)
+        return true
+    }
+
+    async delete(id) {
+        await db.collection(this.table).doc(id).delete()
+        return true
+    }
+
+    async deleteMany(ids) {
+        // delete only up to 10 documents
+        if (ids.length > 10) throw new Error('Cannot delete more than 10 items')
+
+        const query = db.collection(this.table).where('__name__', 'in', ids)
+
+        return new Promise((resolve, reject) => {
+            deleteQueryBatch(db, query, resolve).catch(reject)
+        })
+    }
+
+    // Based on Cloud Firestore docs
+    async deleteAll() {
+        const collectionRef = db.collection(this.table)
+        const query = collectionRef.orderBy('__name__').limit(50)   // batch size
+
+        return new Promise((resolve, reject) => {
+            deleteQueryBatch(db, query, resolve).catch(reject)
+        })
+    }
+}
+
+const Task = new TaskModel()
 
 // Setup
 
@@ -51,7 +142,7 @@ app.head('/status', (req, res) => {
 app.enable('trust proxy')
 
 const cors = require('cors')
-const { json } = require('express')
+const { json } = require('express');
 app.use(cors())
 
 app.use(require('method-override')())
@@ -163,6 +254,22 @@ taskRouter.delete(
 )
 
 taskRouter.delete(
+    '/all',
+    async (req, res, next) => {
+        console.log('Calling /task')
+
+        try {
+            const deletedCount = await deleteAllTasks()
+            if (!deletedCount) return next(new Error('No items were deleted'))
+            return res.status(200).json({ deletedCount })
+        } catch (error) {
+            console.error('Error: %o', error)
+            return next(error)
+        }
+    }
+)
+
+taskRouter.delete(
     '/:id',
     async (req, res, next) => {
         console.log('Calling /task')
@@ -217,13 +324,12 @@ async function getTimeline(dateRange) {
     try {
         if (dateRange) {
             const { startDate, endDate } = dateRange
-            const records = await Task.findAll({
-                where: { start: { [Op.between]: [startDate, endDate] } }
-            })
-            return records
+            return Task.getMany({ dateRange: {
+                startDate: isDate(startDate) ? startDate.toJSON() : startDate,
+                endDate: isDate(endDate) ? endDate.toJSON() : endDate
+            } })
         }
-        const records = await Task.findAll()
-        return records
+        return Task.getAll()
     } catch (error) {
         throw new Error(`Error getting timeline: ${error}`)
     }
@@ -240,7 +346,8 @@ async function getTodaysSchedule() {
 async function createSchedule(schedule) {
     try {
         if (!schedule || !schedule.length) return null
-        const records = await Task.bulkCreate(schedule)
+        const parsedSchedule = schedule.map(parseTaskDates)
+        const records = await Task.createMany(parsedSchedule)
         return records
     } catch (error) {
         throw new Error(`Error creating schedule: ${error}`)
@@ -249,8 +356,8 @@ async function createSchedule(schedule) {
 
 async function editTask(id, task) {
     try {
-        const [updatedCount] = await Task.update(task, { where: { id } })
-        return !!updatedCount   // was updated (or found)?
+        const parsedTask = parseTaskDates(task)
+        return Task.update(id, parsedTask)
     } catch (error) {
         throw new Error(`Error editing task ${id}: ${error}`)
     }
@@ -258,8 +365,7 @@ async function editTask(id, task) {
 
 async function deleteTask(id) {
     try {
-        const deletedCount = await Task.destroy({ where: { id } })
-        return !!deletedCount   // was deleted?
+        return Task.delete(id)
     } catch (error) {
         throw new Error(`Error deleting task ${id}: ${error}`)
     }
@@ -267,11 +373,32 @@ async function deleteTask(id) {
 
 async function deleteManyTasks(ids) {
     try {
-        const deletedCount = await Task.destroy({ where: { id: ids } })
+        const { deletedCount } = await Task.deleteMany(ids)
         return deletedCount
     } catch (error) {
         throw new Error(`Error deleting tasks ${ids.join(', ')}: ${error}`)
     }
+}
+
+async function deleteAllTasks() {
+    try {
+        const { deletedCount } = await Task.deleteAll()
+        return deletedCount
+    } catch (error) {
+        throw new Error(`Error deleting all tasks: ${error}`)
+    }
+}
+
+function parseTaskDates(task) {
+    return {
+        ...task,
+        start: isDate(task.start) ? task.start.toJSON() : task.start,
+        end: isDate(task.end) ? task.end.toJSON() : task.end
+    }
+}
+
+function isDate(timestamp) {
+    return timestamp instanceof Date
 }
 
 exports.api = functions.https.onRequest(app)
