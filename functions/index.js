@@ -92,7 +92,6 @@ class TaskModel {
     }
 
     async update(id, task) {
-        const taskData = { ...task }; delete taskData.id
         await db.collection(this.table).doc(id).update(task)
         return true
     }
@@ -336,10 +335,13 @@ async function getTimeline(dateRange) {
 }
 
 async function getTodaysSchedule() {
-    const now = new Date()
-    const today = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`
-    const startDate = new Date(today)
-    const endDate = new Date(`${today} 23:59:59`)
+    // TODO: request user timezone or get from DB
+    // Hardcoded for Pacific Standard Time
+    const offsetInMs = -8 * 60 * 60 * 1000
+    const now = new Date(Date.now() + offsetInMs)
+    const today = new Date(now.toLocaleDateString())
+    const startDate = new Date(today.getTime() - offsetInMs)
+    const endDate = new Date(startDate.getTime() + (24 * 60 * 60 - 1) * 1000)
     return getTimeline({ startDate, endDate })
 }
 
